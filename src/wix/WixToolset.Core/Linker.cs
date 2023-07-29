@@ -134,6 +134,13 @@ namespace WixToolset.Core
                     command.Execute();
                 }
 
+                // Add default symbols that need a bit more intelligence than just being
+                // included in the standard library.
+                {
+                    var command = new AddDefaultSymbolsCommand(find, sections);
+                    command.Execute();
+                }
+
                 // Resolve the symbol references to find the set of sections we care about for linking.
                 // Of course, we start with the entry section (that's how it got its name after all).
                 var resolve = new ResolveReferencesCommand(this.Messaging, find.EntrySection, find.SymbolsByName);
