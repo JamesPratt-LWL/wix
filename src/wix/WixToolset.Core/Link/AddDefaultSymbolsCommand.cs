@@ -2,6 +2,7 @@
 
 namespace WixToolset.Core.Link
 {
+    using System;
     using System.Collections.Generic;
     using System.Linq;
     using WixToolset.Data;
@@ -19,8 +20,6 @@ namespace WixToolset.Core.Link
             this.Sections = sections;
         }
 
-        public IntermediateSection EntrySection { get; }
-
         public IEnumerable<IntermediateSection> Sections { get; }
 
         public FindEntrySectionAndLoadSymbolsCommand Find { get; }
@@ -34,8 +33,8 @@ namespace WixToolset.Core.Link
             }
 
             var symbols = this.Sections.SelectMany(s => s.Symbols);
-            var directorySymbols = symbols.OfType<DirectorySymbol>();
             var referenceSymbols = symbols.OfType<WixSimpleReferenceSymbol>();
+            var directorySymbols = symbols.OfType<DirectorySymbol>();
 
             if (referenceSymbols.Any(s => s.SymbolicName == WixStandardInstallFolderReference)
                 && !directorySymbols.Any(d => d.Id.Id == WixStandardInstallFolder))
@@ -55,15 +54,81 @@ namespace WixToolset.Core.Link
                     PrimaryKeys = WixStandardInstallFolderParent,
                 });
             }
+
+            var upgradeSymbols = symbols.OfType<UpgradeSymbol>();
+            if (!upgradeSymbols.Any())
+            {
+                var packageSymbol = this.Find.EntrySection.Symbols.OfType<WixPackageSymbol>().FirstOrDefault();
+
+                if (packageSymbol?.UpgradeStrategy == WixPackageUpgradeStrategy.MajorUpgrade
+                    && !String.IsNullOrEmpty(packageSymbol?.UpgradeCode))
+                {
+                    this.AddDefaultMajorUpgrade(packageSymbol);
+                }
+
+            }
+        }
+
+        private void AddDefaultMajorUpgrade(WixPackageSymbol packageSymbol)
+        {
+            this.AddSymbol(new UpgradeSymbol(packageSymbol.SourceLineNumbers)
+            {
+                UpgradeCode = packageSymbol.UpgradeCode,
+                MigrateFeatures = true,
+                ActionProperty = WixUpgradeConstants.UpgradeDetectedProperty,
+                VersionMax = packageSymbol.Version,
+                Language = packageSymbol.Language,
+            });
+
+            this.AddSymbol(new UpgradeSymbol(packageSymbol.SourceLineNumbers)
+            {
+                UpgradeCode = packageSymbol.UpgradeCode,
+                VersionMin = packageSymbol.Version,
+                Language = packageSymbol.Language,
+                OnlyDetect = true,
+                ActionProperty = WixUpgradeConstants.DowngradeDetectedProperty,
+            });
+
+            this.AddSymbol(new LaunchConditionSymbol(packageSymbol.SourceLineNumbers)
+            {
+                Condition = WixUpgradeConstants.DowngradePreventedCondition,
+                Description = "!(loc.WixDowngradePreventedMessage)",
+            });
+
+            this.CreateActionSymbol(this.Find.EntrySection, packageSymbol.SourceLineNumbers, SequenceTable.InstallExecuteSequence, "RemoveExistingProducts", "InstallValidate");
+        }
+
+        public WixActionSymbol CreateActionSymbol(IntermediateSection section, SourceLineNumber sourceLineNumbers, SequenceTable sequence, string actionName, string afterAction)
+        {
+            var actionId = new Identifier(AccessModifier.Global, sequence, actionName);
+
+            var actionSymbol = section.AddSymbol(new WixActionSymbol(sourceLineNumbers, actionId)
+            {
+                SequenceTable = sequence,
+                Action = actionName,
+                After = afterAction,
+            });
+
+            section.AddSymbol(new WixSimpleReferenceSymbol(sourceLineNumbers)
+            {
+                Table = SymbolDefinitions.WixAction.Name,
+                PrimaryKeys = $"{sequence}/{afterAction}",
+            });
+
+            return actionSymbol;
         }
 
         private void AddSymbol(IntermediateSymbol symbol)
         {
             this.Find.EntrySection.AddSymbol(symbol);
 
-            var symbolWithSection = new SymbolWithSection(this.Find.EntrySection, symbol);
-            var fullName = symbolWithSection.GetFullName();
-            this.Find.SymbolsByName.Add(fullName, symbolWithSection);
+            if (!String.IsNullOrEmpty(symbol.Id?.Id))
+            {
+                var symbolWithSection = new SymbolWithSection(this.Find.EntrySection, symbol);
+                var fullName = symbolWithSection.GetFullName();
+
+                this.Find.SymbolsByName.Add(fullName, symbolWithSection);
+            }
         }
     }
 }
